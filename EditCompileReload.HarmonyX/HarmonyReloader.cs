@@ -159,8 +159,19 @@ public sealed class HarmonyReloader
 
             // A reloaded copy of an existing class has no class attributes; read them from the startup class.
             var classSource = isOriginal ? type : original.GetType(type.FullName!) ?? type;
-            var classAttributes = HarmonyMethodExtensions.GetFromType(classSource) ?? [];
-            var classInfo = classAttributes.Count > 0 ? HarmonyMethod.Merge(classAttributes) : null;
+            HarmonyMethod? classInfo;
+            try
+            {
+                var classAttributes = HarmonyMethodExtensions.GetFromType(classSource) ?? [];
+                classInfo = classAttributes.Count > 0 ? HarmonyMethod.Merge(classAttributes) : null;
+            }
+            catch (Exception e)
+            {
+                // An attribute refers to an assembly that is not loaded, such as an optional dependency. Harmony cannot
+                // patch this class either, so it is not reloaded.
+                SkipUnreadable(type.FullName!, e, isOriginal);
+                continue;
+            }
 
             foreach (var method in type.GetMethods(DeclaredStatic))
             {
@@ -170,15 +181,26 @@ public sealed class HarmonyReloader
                 if (isOriginal && isImpl) continue; // Startup patches point at the stub, not the implementation.
                 string baseName = isImpl ? name.Substring(0, name.Length - "_Impl".Length) : name;
 
-                var kind = GetKind(method, baseName, classInfo != null);
-                if (kind == null) continue;
-                if (kind == HarmonyPatchType.ReversePatch)
+                HarmonyPatchType? kind;
+                List<HarmonyMethod> targets;
+                try
                 {
-                    EcrLog.Message($"Harmony: reverse patch {type.FullName}.{baseName} is not reloaded");
+                    kind = GetKind(method, baseName, classInfo != null);
+                    if (kind == null) continue;
+                    if (kind == HarmonyPatchType.ReversePatch)
+                    {
+                        if (isOriginal) EcrLog.Message($"Harmony: reverse patch {type.FullName}.{baseName} is not reloaded");
+                        continue;
+                    }
+
+                    targets = GetTargets(method, classInfo);
+                }
+                catch (Exception e)
+                {
+                    SkipUnreadable($"{type.FullName}.{baseName}", e, isOriginal);
                     continue;
                 }
 
-                var targets = GetTargets(method, classInfo);
                 if (targets.Count == 0) continue;
 
                 var definition = new PatchDefinition(
@@ -196,6 +218,17 @@ public sealed class HarmonyReloader
         }
 
         return patches;
+    }
+
+    // Reported once, when the startup assembly is scanned; later scans skip the same members without a message.
+    private static void SkipUnreadable(string member, Exception e, bool isOriginal)
+    {
+        if (!isOriginal) return;
+        Exception cause = e is TargetInvocationException { InnerException: not null } ? e.InnerException! : e;
+        string reason = cause is FileNotFoundException missing && missing.FileName != null
+            ? "an attribute needs " + missing.FileName.Split(',')[0] + ", which is not loaded"
+            : cause.GetType().Name + ": " + cause.Message;
+        EcrLog.Message($"Harmony: not checking {member} for patches; {reason}");
     }
 
     private static HarmonyPatchType? GetKind(MethodInfo method, string baseName, bool inPatchClass)
