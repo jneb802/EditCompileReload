@@ -125,6 +125,8 @@ dependencies, which the instrumented plugins load from there. A mod then only re
 ```
 Install the host plugin only next to instrumented builds; it is a development tool.
 
+For a step-by-step setup of a Valheim mod, see [ValheimModGuide.md](ValheimModGuide.md).
+
 ## Supported edits
 - Adding, modifying and removing:
     - Types
