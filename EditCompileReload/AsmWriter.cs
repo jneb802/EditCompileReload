@@ -83,7 +83,7 @@ public static class AsmWriter
                 asmData.fields.Remove(f);
     }
 
-    private static bool IsCompilerGeneratedRecursive(TypeDefinition type)
+    internal static bool IsCompilerGeneratedRecursive(TypeDefinition type)
     {
         if (type.IsCompilerGenerated())
             return true;
@@ -125,9 +125,6 @@ public static class AsmWriter
         var stElemAndReturn =
             new CorLibReplaceImporter(mainModule).ImportMethod(
                 typeof(AsmWriter).GetMethod(nameof(StElemAndReturn))!);
-        var registerFileWatcher =
-            new CorLibReplaceImporter(mainModule).ImportMethod(
-                typeof(Ecr).GetMethod(nameof(Ecr.RegisterFileWatcher))!);
         var runtimeTypeHandleType = new CorLibReplaceImporter(mainModule).ImportType(typeof(RuntimeTypeHandle));
         var objTypeSig = mainModule.CorLibTypeFactory.Object.Type.ToTypeSignature();
 
@@ -211,8 +208,16 @@ public static class AsmWriter
             moduleType.Methods.Add(moduleCctor);
         }
 
-        moduleCctor.CilMethodBody!.Instructions.Insert(0, CilOpCodes.Ldstr, path + "_orig");
-        moduleCctor.CilMethodBody!.Instructions.Insert(1, CilOpCodes.Call, registerFileWatcher);
+        // Watch the original-assembly copy next to wherever the instrumented assembly is loaded from, so the assembly
+        // can be deployed to another folder or machine. The build path is the fallback for assemblies loaded from bytes.
+        var registerFileWatcherNextTo =
+            new CorLibReplaceImporter(mainModule).ImportMethod(
+                typeof(Ecr).GetMethod(nameof(Ecr.RegisterFileWatcherNextTo))!);
+        var anchorType = mainModule.TopLevelTypes.First(t => !t.IsModuleType && t.GenericParameters.Count == 0);
+        moduleCctor.CilMethodBody!.Instructions.Insert(0, CilOpCodes.Ldtoken, anchorType);
+        moduleCctor.CilMethodBody!.Instructions.Insert(1, CilOpCodes.Ldstr, Path.GetFileName(path) + "_orig");
+        moduleCctor.CilMethodBody!.Instructions.Insert(2, CilOpCodes.Ldstr, path + "_orig");
+        moduleCctor.CilMethodBody!.Instructions.Insert(3, CilOpCodes.Call, registerFileWatcherNextTo);
 
         EcrLog.Message($"Method clone took {watch.GetMillisAndRestart()}ms");
 
@@ -413,13 +418,71 @@ public static class AsmWriter
             stElemAndReturn
         );
 
+        // The stub calls a small invoker method that does the indirect call, instead of using calli itself. Patching
+        // libraries copy the body of a method they patch, and MonoMod (used by HarmonyX) cannot copy calli on Mono.
+        // The invoker is never patched, so the stub only holds instructions that can be copied.
+        var invoker = MakeAndAddInvoker(origMethod, clonedMethodImpl, methodSpec.Signature!);
         callLabel.Instruction = origMethodBody.Instructions.Add(
-            CilOpCodes.Calli,
-            methodSpec.Signature.MakeStandAloneSignature()
+            CilOpCodes.Call,
+            InvokerCallSite(invoker, type.GenericParameters.Count, origMethod.GenericParameters.Count)
         );
 
         origMethodBody.Instructions.Add(CilOpCodes.Ret);
         methodIndex++;
+    }
+
+    /// <summary>
+    /// Adds <c>static R &lt;name&gt;_Invoke(params of the implementation..., IntPtr fn)</c> next to the implementation. It
+    /// pushes its arguments and calls <c>fn</c> with the implementation's signature. It has the method's generic
+    /// parameters and lives in the same type, so the signature means the same as it does in the stub.
+    /// </summary>
+    private static MethodDefinition MakeAndAddInvoker(MethodDefinition origMethod, MethodDefinition impl, MethodSignature implSignature)
+    {
+        // The implementation's type may not be added to a module yet, so take IntPtr from the source method's module.
+        var parameterTypes = implSignature.ParameterTypes.ToList();
+        parameterTypes.Add(origMethod.DeclaringModule!.CorLibTypeFactory.IntPtr);
+
+        var invoker = new MethodDefinition(
+            origMethod.Name + "_Invoke",
+            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+            new MethodSignature(
+                origMethod.GenericParameters.Count > 0 ? CallingConventionAttributes.Generic : CallingConventionAttributes.Default,
+                implSignature.ReturnType,
+                parameterTypes)
+            {
+                GenericParameterCount = origMethod.GenericParameters.Count
+            });
+
+        foreach (var genericParam in origMethod.GenericParameters)
+            invoker.GenericParameters.Add(new GenericParameter(genericParam.Name));
+
+        invoker.Parameters.PullUpdatesFromMethodSignature();
+        var body = new CilMethodBody();
+        invoker.CilMethodBody = body;
+        for (int i = 0; i < parameterTypes.Count; i++)
+            body.Instructions.Add(CilOpCodes.Ldarg, invoker.Parameters[i]);
+        body.Instructions.Add(CilOpCodes.Calli, implSignature.MakeStandAloneSignature());
+        body.Instructions.Add(CilOpCodes.Ret);
+
+        impl.DeclaringType!.Methods.Add(invoker);
+        return invoker;
+    }
+
+    private static IMethodDescriptor InvokerCallSite(MethodDefinition invoker, int typeGenericParameters, int methodGenericParameters)
+    {
+        var declaringType = invoker.DeclaringType!;
+        IMethodDefOrRef reference = typeGenericParameters > 0
+            ? new MemberReference(
+                new TypeSpecification(declaringType.MakeGenericInstanceType(Enumerable.Range(0, typeGenericParameters)
+                    .Select(TypeSignature (i) => new GenericParameterSignature(GenericParameterType.Type, i)).ToArray())),
+                invoker.Name,
+                invoker.Signature)
+            : invoker;
+
+        return methodGenericParameters > 0
+            ? reference.MakeGenericInstanceMethod(Enumerable.Range(0, methodGenericParameters)
+                .Select(TypeSignature (i) => new GenericParameterSignature(GenericParameterType.Method, i)).ToArray())
+            : reference;
     }
 
     public static IntPtr StElemAndReturn(IntPtr value, IntPtr[] arr, int index)
