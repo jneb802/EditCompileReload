@@ -112,6 +112,19 @@ It removes startup patches whose method was deleted or whose patch attributes ch
 attribute patches under the ID `<HarmonyId>.hotreload`. Patches applied by hand with `Harmony.Patch`, reverse patches,
 and new patch methods in classes that were not patched at startup are left alone. The host provides `0Harmony`.
 
+## BepInEx host plugin
+`EditCompileReload.BepInEx` is a BepInEx 5 plugin that does the host's part for every instrumented plugin, so a mod
+only needs the compiler plugin and no reload code. It sends ECR messages to the BepInEx log, runs the reload switch on
+Unity's main thread, and runs `HarmonyReloader` for each reloaded plugin under that plugin's GUID.
+
+Build it with `dotnet build EditCompileReload.BepInEx -c Release` and copy the whole
+`EditCompileReload.BepInEx/bin/Release` folder into `BepInEx/plugins`. It contains the ECR runtime and its
+dependencies, which the instrumented plugins load from there. A mod then only references the compiler plugin package:
+```xml
+<PackageReference Include="EditCompileReload.CompilerPlugin" Version="..." PrivateAssets="all" />
+```
+Install the host plugin only next to instrumented builds; it is a development tool.
+
 ## Supported edits
 - Adding, modifying and removing:
     - Types
