@@ -22,7 +22,8 @@ prefabs use the mod's `MonoBehaviour` classes still load.
 ## What can and cannot be reloaded
 
 **These edits reload:**
-- Method bodies, including Harmony patch methods, `Update` methods of live components, lambdas and iterators.
+- Method bodies, including Harmony patch methods and `Update` methods of live components.
+- Lambdas and iterators in a method, the next time that method runs and creates them.
 - New methods, new classes and new static fields.
 - New Harmony patch methods that use `[HarmonyPatch]` attributes, plus deleted ones and ones whose target or patch type
   changed.
@@ -41,6 +42,10 @@ Once you undo a refused edit, the next build reloads normally.
   not what they already did. To re-run setup on each reload, add a parameterless static method named
   `OnEditCompileReload` anywhere in the mod. The host calls it on the main thread after each reload. Otherwise,
   restart for these changes.
+- **A lambda keeps its old code if its delegate was created before the reload.** Console commands, event handlers
+  and callbacks registered at startup with a lambda keep running the old lambda body. Edits to methods that the
+  lambda calls do reload. To keep such code editable, make the lambda a one-line call to a named method, such as
+  `args => RunMyCommand(args)`, and put the logic in that method.
 - **A method that is already running finishes with its old code.** This applies to a coroutine or iterator in
   progress, and to a loop inside a long call. The next call runs the new code.
 - **Harmony patches applied by hand** with `harmony.Patch(...)` are not re-applied. Their patch method bodies still
@@ -206,6 +211,8 @@ Some server mods check the plugins and files of joining clients. With a hot relo
 | Copying the file does nothing | The file was copied into a different folder from the one the mod was loaded from, or under a different name. The watched file is `<Mod>.dll_orig` next to the loaded `<Mod>.dll`. |
 | `Reload of <Mod> refused` | The edit needs a restart (see the list above). Undo it to keep reloading, or restart and copy all three files. |
 | Startup code changes have no effect | Startup code does not run again. Use `OnEditCompileReload`, or restart. |
+| A command or event handler still runs old code | It is a lambda registered at startup. Move its body into a named method (see above), then restart once. |
+| `Harmony: not checking <member> for patches; an attribute needs <assembly>` | The member has an attribute from an optional dependency that is not installed. It is not a patch Harmony could apply, so this needs no action. |
 | A new Harmony patch did not apply | It was applied by hand with `harmony.Patch`, or its class had patches at startup that the mod chose not to apply. The `Harmony:` log line counts the patches applied. |
 | `Could not load file or assembly 'EditCompileReload'` | The host plugin folder is missing or incomplete. Copy the whole folder, not only the host DLL. |
 | The mod fails to load after an update of this repository | The mod was built with a different version of the compiler plugin from the host plugin's runtime. Rebuild both from the same checkout and bump the package version. |
