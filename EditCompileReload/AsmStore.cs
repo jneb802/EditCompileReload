@@ -16,6 +16,8 @@ public class AssemblyData
     public Dictionary<string, int> methods = new();
     public Dictionary<string, int> fields = new();
     public List<Assembly> assemblies = new();
+    // Layout of the types loaded at startup, which a reload cannot change. Empty when no original was registered.
+    public Dictionary<string, TypeLayout> layouts = new();
 
     public AssemblyData Copy()
     {
@@ -25,7 +27,8 @@ public class AssemblyData
             types = types.ToDictionary(kv => kv.Key, kv => kv.Value),
             methods = methods.ToDictionary(kv => kv.Key, kv => kv.Value),
             fields = fields.ToDictionary(kv => kv.Key, kv => kv.Value),
-            assemblies = assemblies.ToList()
+            assemblies = assemblies.ToList(),
+            layouts = layouts
         };
     }
 }

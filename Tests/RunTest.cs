@@ -21,6 +21,7 @@ public class RunTest
     {
         EcrLog.verboseCallback = Console.WriteLine;
         Ecr.writeSwappedAssembly = true;
+        Ecr.SettleMilliseconds = 100;
 
         // Prevent from being loaded as a dependency
         File.Delete("TestAssembly1.dll");
@@ -66,7 +67,10 @@ public class RunTest
         );
 
         // Wait for the file watcher event to get processed
-        Thread.Sleep(1000);
+        int version = AsmStore.assemblyData[origAsm!.Name!].version;
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (AsmStore.assemblyData[origAsm.Name!].version == version && DateTime.UtcNow < deadline)
+            Thread.Sleep(50);
     }
 
     [Test]

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <AssemblyName>EditCompileReload.HarmonyX</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package properties">
+    <Title>EditCompileReload.HarmonyX</Title>
+    <PackageId>EditCompileReload.HarmonyX</PackageId>
+    <Authors>Zetrith</Authors>
+    <Version>1.0.2</Version>
+    <Description>Keeps HarmonyX patches in step with EditCompileReload reloads. The host provides 0Harmony.</Description>
+    <PackageProjectUrl>https://github.com/Zetrith/EditCompileReload</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Zetrith/EditCompileReload</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EditCompileReload\EditCompileReload.csproj" />
+    <!-- The host (for example BepInEx) ships 0Harmony, so it is neither copied nor a package dependency. -->
+    <PackageReference Include="HarmonyX" Version="2.9.0" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

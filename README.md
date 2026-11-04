@@ -80,7 +80,52 @@ It's best to look at an example in the [test suite](https://github.com/Zetrith/E
 ## Compiler plugin
 The compiler plugin runs an MSBuild task, `HotSwapTask`, which, after the `CopyFilesToOutputDirectory` target:
 - Instruments the project assembly adding helpers for hotswapping
+- Rewrites a portable `.pdb` to match the instrumented assembly. A `.pdb` in another format is deleted, because a runtime that reads stale symbols for the rewritten methods can crash (Mono aborts)
 - Copies the original project assembly to a file with a `.dll_orig` extension
+
+The instrumented assembly watches the `.dll_orig` file in the folder it was loaded from, so the build output can be
+deployed elsewhere (for example a game's plugin folder or another machine). Copy the `.dll_orig` of a new build next to
+the deployed assembly to reload. Copies that write the file in place and copies that rename a finished file over it are
+both detected; the reload starts once the file has not changed for `Ecr.SettleMilliseconds` (1000 by default).
+
+## Running reloads on the host's main thread
+Reading, rewriting and loading a changed assembly happen on ECR's processing thread. The step that switches running code
+to the new version, the `OnEditCompileReload` callbacks and the `Ecr.Reloaded` event run through `Ecr.applyDispatcher`.
+A host whose code runs on one thread, such as a Unity game, queues that step for its main thread:
+```csharp
+static readonly ConcurrentQueue<Action> reloads = new();
+// At startup:
+Ecr.applyDispatcher = reloads.Enqueue;
+// Once per frame, on the main thread:
+while (reloads.TryDequeue(out var apply)) apply();
+```
+`Ecr.Reloaded` passes a `ReloadInfo` with the original and the newest assembly.
+
+## HarmonyX patches
+Calls from an instrumented method go through a small `_Invoke` helper, so HarmonyX/MonoMod can patch instrumented
+methods. Patches applied at startup run the newest body of their patch method after a reload. To also apply patch
+methods that were added, deleted or retargeted, reference `EditCompileReload.HarmonyX` and attach it once at startup:
+```csharp
+EditCompileReload.HarmonyX.HarmonyReloader.Attach(typeof(MyPlugin).Assembly, MyPlugin.HarmonyId);
+```
+It removes startup patches whose method was deleted or whose patch attributes changed, and applies added or changed
+attribute patches under the ID `<HarmonyId>.hotreload`. Patches applied by hand with `Harmony.Patch`, reverse patches,
+and new patch methods in classes that were not patched at startup are left alone. The host provides `0Harmony`.
+
+## BepInEx host plugin
+`EditCompileReload.BepInEx` is a BepInEx 5 plugin that does the host's part for every instrumented plugin, so a mod
+only needs the compiler plugin and no reload code. It sends ECR messages to the BepInEx log, runs the reload switch on
+Unity's main thread, and runs `HarmonyReloader` for each reloaded plugin under that plugin's GUID.
+
+Build it with `dotnet build EditCompileReload.BepInEx -c Release` and copy the whole
+`EditCompileReload.BepInEx/bin/Release` folder into `BepInEx/plugins`. It contains the ECR runtime and its
+dependencies, which the instrumented plugins load from there. A mod then only references the compiler plugin package:
+```xml
+<PackageReference Include="EditCompileReload.CompilerPlugin" Version="..." PrivateAssets="all" />
+```
+Install the host plugin only next to instrumented builds; it is a development tool.
+
+For a step-by-step setup of a Valheim mod, see [ValheimModGuide.md](ValheimModGuide.md).
 
 ## Supported edits
 - Adding, modifying and removing:
@@ -112,12 +157,17 @@ The compiler plugin runs an MSBuild task, `HotSwapTask`, which, after the `CopyF
     - Add members to nested types (current limitation, to be supported)
     - Add instance fields (current limitation, to be supported)
     - Add constructors
+    - Add or remove interfaces of a type, or change its field layout
     - Add, remove or modify attributes of existing members
     - Change the base type of a type
     - Add virtual methods
     - Change the virtuality of a method
     - Rename members
       - Would require IDE support
+
+  A build that adds, removes, reorders or retypes instance fields of a loaded type, changes its base type, interfaces
+  or layout, adds or removes virtual methods, or adds constructors is refused with an error that lists the changes.
+  Without this check, code reloaded against a different field layout reads and writes the wrong memory.
 
 #### Performance
 - Library
